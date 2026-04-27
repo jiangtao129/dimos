@@ -13,12 +13,15 @@ name: verify
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - '**.md'
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
+# Note: no `paths-ignore` filter. Branch protection on main requires the
+# `verify` check to exist and pass; if `paths-ignore` skipped this workflow
+# for any path (e.g. doc-only PRs) the check would never be created and the
+# PR would deadlock at `mergeStateStatus: BLOCKED`. Keep this trigger
+# unfiltered so every PR has a `verify` run regardless of what files it
+# touches. The 11-min cost of running verify on a doc-only PR is the
+# explicit trade-off for keeping branch protection consistent.
 
 permissions:
   contents: read
