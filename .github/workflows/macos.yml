@@ -20,7 +20,10 @@ permissions:
 
 jobs:
   check-changes:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # Fork gate: the `checks` job below uses a self-hosted macOS arm64
+    # runner that exists only upstream. Skipping check-changes also skips
+    # checks via the `needs` chain.
+    if: github.repository == 'dimensionalOS/dimos' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     outputs:
       should-run: ${{ steps.filter.outputs.python }}
@@ -38,7 +41,10 @@ jobs:
 
   checks:
     needs: [check-changes]
-    if: needs.check-changes.outputs.should-run == 'true'
+    # Belt-and-suspenders: even though check-changes is gated above, also
+    # gate checks directly so a manual workflow_dispatch on the fork can't
+    # somehow trigger the self-hosted macOS runner.
+    if: github.repository == 'dimensionalOS/dimos' && needs.check-changes.outputs.should-run == 'true'
     runs-on: [self-hosted, macos, arm64]
     timeout-minutes: 60
     env:

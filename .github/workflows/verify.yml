@@ -1,0 +1,60 @@
+name: verify
+
+# Single CI gate for the jiangtao129/dimos fork. Mirrors `scripts/verify.sh`
+# 1:1 so "passed locally" implies "passes in CI" (modulo system deps that
+# only the GitHub Actions ubuntu-latest image carries).
+#
+# All other workflows in this directory (ci.yml, macos.yml, code-cleanup.yml,
+# docker-build.yml, stale.yml) gate themselves to the upstream repository
+# (`if: github.repository == 'dimensionalOS/dimos'`) and so do not run on
+# this fork. The branch protection rule should require **only** this
+# workflow's `verify` job.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**.md'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # LFS objects are deliberately not on jiangtao129/dimos (Q4=B in
+          # docs/dimos_pipeline_setup_for_agent.md). Tests that need them
+          # are soft-skipped by the repo-root conftest.py, gated on
+          # DIMOS_SKIP_MISSING_LFS=1 (set automatically by verify.sh).
+          lfs: false
+
+      - name: Install git-lfs (pointer parsing only)
+        # `git lfs ls-files` and `_lfs_pull`'s subprocess call still need
+        # the `git-lfs` binary on PATH even though we never push/pull
+        # actual objects.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git-lfs
+          git lfs install --skip-smudge
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Run unified verify
+        run: bash ./scripts/verify.sh
