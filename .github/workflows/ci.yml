@@ -15,7 +15,10 @@ permissions:
 
 jobs:
   ci-complete:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # Fork gate: this job uses upstream's self-hosted runner, ghcr private
+    # image, and OpenAI/Anthropic/Alibaba secrets that exist only on
+    # dimensionalOS/dimos. On jiangtao129/dimos the gate is verify.yml.
+    if: github.repository == 'dimensionalOS/dimos' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     timeout-minutes: 60
     runs-on: [self-hosted, Linux]
     container:

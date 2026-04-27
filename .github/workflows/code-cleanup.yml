@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   pre-commit:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # Fork gate: self-hosted runner only available upstream. The fork
+    # runs pre-commit inside scripts/verify.sh on ubuntu-latest instead.
+    if: github.repository == 'dimensionalOS/dimos' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: self-hosted
     steps:
     - name: Fix permissions
