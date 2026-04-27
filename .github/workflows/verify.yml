@@ -39,13 +39,22 @@ jobs:
           # DIMOS_SKIP_MISSING_LFS=1 (set automatically by verify.sh).
           lfs: false
 
-      - name: Install git-lfs (pointer parsing only)
-        # `git lfs ls-files` and `_lfs_pull`'s subprocess call still need
-        # the `git-lfs` binary on PATH even though we never push/pull
-        # actual objects.
+      - name: Install system dependencies (compile + runtime)
+        # Subset of the upstream `docker/python/Dockerfile` apt list, narrowed to
+        # what `uv sync --all-extras --no-extra dds --frozen` needs to build and
+        # what the test suite needs at runtime:
+        #   - git-lfs           : git lfs ls-files / pull (pointer-only)
+        #   - portaudio19-dev   : pyaudio (transitive via dimos[unitree] ->
+        #                         unitree-webrtc-connect-leshy -> pyaudio)
+        #   - libturbojpeg0-dev : PyTurboJPEG (used in dimos.msgs.sensor_msgs.Image)
+        # qt/mesa/xcb are intentionally NOT installed; verify.sh does not run
+        # any GUI test path.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends git-lfs
+          sudo apt-get install -y --no-install-recommends \
+            git-lfs \
+            portaudio19-dev \
+            libturbojpeg0-dev
           git lfs install --skip-smudge
 
       - name: Install uv
