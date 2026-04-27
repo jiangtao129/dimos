@@ -77,3 +77,13 @@ CLAUDE.MD
 htmlcov/
 .coverage
 .coverage.*
+
+# Editor / OS swap files (commonly missed)
+*.bak
+*.swp
+*.swo
+*~
+
+# Tool caches not yet listed
+.pytest_cache/
+.ruff_cache/
