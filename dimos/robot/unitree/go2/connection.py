@@ -116,6 +116,79 @@ BASE_TO_OPTICAL: Transform = Transform(
 )
 
 
+def _resolve_robot_ip(hint: str | None, timeout: float = 2.0) -> str:
+    """Discover Go2 robots on the LAN and pick the right one.
+
+    Always scans (cost: ~2s) because Go2 IPs change frequently — a stale
+    ROBOT_IP would otherwise silently lead to a wrong / failed connection.
+
+    Resolution rules:
+      hint in discovered.ips  -> use hint (validated, "still on LAN")
+      hint not in discovered, len(discovered) == 1 -> use the one (with notice)
+      hint not in discovered, len(discovered) >= 2 -> interactive prompt
+      hint not in discovered, len(discovered) == 0 -> RuntimeError
+    """
+    import sys
+
+    import typer
+
+    from dimos.robot.unitree.go2.cli.landiscovery import discover
+
+    if hint:
+        typer.echo(f"ROBOT_IP={hint} — scanning LAN to validate ...")
+    else:
+        typer.echo("ROBOT_IP not set — scanning LAN for Go2 robots ...")
+    devices = discover(timeout=timeout)
+
+    # 0 found
+    if not devices:
+        msg = "No Go2 robots discovered on the LAN."
+        if hint:
+            msg += f"\n  ROBOT_IP={hint} is also not on this LAN."
+        msg += (
+            "\n  Check:\n"
+            "    1. robot powered on and on the same network as this machine\n"
+            "    2. `dimos go2tool discover` can find it manually\n"
+            "    3. otherwise set ROBOT_IP=X.X.X.X explicitly"
+        )
+        raise RuntimeError(msg)
+
+    # hint is valid
+    if hint and any(d.ip == hint for d in devices):
+        typer.echo(f"  -> ROBOT_IP={hint} is online, using it.")
+        return hint
+
+    # hint stale -> notice
+    if hint:
+        typer.echo(f"  Warning: ROBOT_IP={hint} not found on the LAN (stale).")
+
+    # Single device: use it (no prompt)
+    if len(devices) == 1:
+        d = devices[0]
+        typer.echo(f"  -> Found 1 Go2: serial={d.serial}, ip={d.ip} (via {d.iface}). Using it.")
+        return d.ip
+
+    # Multiple: prompt by serial (user can't tell which dog by IP)
+    typer.echo(f"\n  Found {len(devices)} Go2 robots:")
+    typer.echo("    #   SERIAL                  IP                IFACE")
+    for i, d in enumerate(devices, 1):
+        typer.echo(f"    {i:<3} {d.serial:<22}  {d.ip:<16}  {d.iface}")
+
+    if not sys.stdin.isatty():
+        ips = ", ".join(d.ip for d in devices)
+        raise RuntimeError(
+            f"Multiple Go2 robots found ({ips}) but stdin is not a TTY "
+            "(daemon mode?). Set ROBOT_IP=X.X.X.X to pick one."
+        )
+
+    idx = typer.prompt("\n  Select robot by number", type=int)
+    if not 1 <= idx <= len(devices):
+        raise RuntimeError(f"Invalid selection: {idx}")
+    chosen = devices[idx - 1]
+    typer.echo(f"  -> Selected serial={chosen.serial}, ip={chosen.ip}")
+    return chosen.ip
+
+
 def make_connection(ip: str | None, cfg: GlobalConfig) -> Go2ConnectionProtocol:
     connection_type = cfg.unitree_connection_type
 
@@ -127,8 +200,12 @@ def make_connection(ip: str | None, cfg: GlobalConfig) -> Go2ConnectionProtocol:
 
         return MujocoConnection(cfg)
     else:
-        assert ip is not None, "IP address must be provided"
-        return UnitreeWebRTCConnection(ip)
+        # Always discover, even if `ip` is provided — Go2 IPs change often,
+        # so validate `ip` is still on LAN; if not, fall through to picker.
+        # `ip == "auto"` is treated as "no hint".
+        hint = None if ip in (None, "auto") else ip
+        resolved = _resolve_robot_ip(hint)
+        return UnitreeWebRTCConnection(resolved)
 
 
 class ReplayConnection(UnitreeWebRTCConnection):
