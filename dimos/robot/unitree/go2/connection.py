@@ -191,10 +191,14 @@ def _resolve_robot_ip(
         typer.echo(f"    {i:<3} {d.serial:<22}  {d.ip:<16}  {d.iface}")
 
     if not sys.stdin.isatty():
+        # Should be unreachable for `dimos run` — the CLI pre-flight in
+        # dimos/robot/cli/dimos.py resolves the IP in the main process
+        # before workers spawn. If you hit this, you're probably using
+        # GO2Connection from a non-CLI entry point (e.g. a script).
         ips = ", ".join(d.ip for d in devices)
         raise RuntimeError(
-            f"Multiple Go2 robots found ({ips}) but stdin is not a TTY "
-            "(daemon mode?). Set ROBOT_IP=X.X.X.X to pick one."
+            f"Multiple Go2 robots found ({ips}) but stdin is not a TTY. "
+            "Set ROBOT_IP=X.X.X.X to pick one, or run from a terminal."
         )
 
     idx = typer.prompt("\n  Select robot by number", type=int)
