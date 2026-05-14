@@ -17,6 +17,11 @@ permissions: {}
 
 jobs:
   lint:
+    # Fork gate: this CI is upstream's, uses upstream secrets / self-hosted
+    # runners / ghcr images that don't exist on jiangtao129/dimos. The fork's
+    # own gate is verify.yml. Mirrors how macos.yml used to gate before
+    # upstream removed it.
+    if: github.repository == 'dimensionalOS/dimos'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
@@ -39,6 +44,7 @@ jobs:
         uses: pre-commit/action@v3.0.1
 
   md-babel:
+    if: github.repository == 'dimensionalOS/dimos'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
@@ -66,6 +72,7 @@ jobs:
         run: ./bin/run-doc-codeblocks --ci --no-cache
 
   tests:
+    if: github.repository == 'dimensionalOS/dimos'
     timeout-minutes: 20
     strategy:
       matrix:
@@ -140,10 +147,14 @@ jobs:
   self-hosted-tests:
     # Skip on draft PRs and on PRs from forks — the latter would expose the
     # self-hosted runner to untrusted code from external contributors.
+    # Also gated to upstream repo only, since jiangtao129/dimos has no
+    # self-hosted runners.
     if: |
-      github.event_name == 'push' || (
-        github.event.pull_request.draft == false &&
-        github.event.pull_request.head.repo.full_name == github.repository
+      github.repository == 'dimensionalOS/dimos' && (
+        github.event_name == 'push' || (
+          github.event.pull_request.draft == false &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        )
       )
     env:
       UV_NO_SYNC: "1"  # Disable installing default packages on `uv run`
@@ -244,7 +255,7 @@ jobs:
   # not across sibling jobs. This watcher fires the moment `tests` fails
   # and cancels the whole workflow run.
   fail-fast:
-    if: failure()
+    if: github.repository == 'dimensionalOS/dimos' && failure()
     needs: [tests]
     runs-on: ubuntu-latest
     permissions:
@@ -256,7 +267,7 @@ jobs:
         run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
 
   ci-complete:  # This is used for branch protection.
-    if: always()
+    if: github.repository == 'dimensionalOS/dimos' && always()
 
     needs:
     - lint
