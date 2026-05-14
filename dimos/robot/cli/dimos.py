@@ -24,7 +24,7 @@ from pathlib import Path
 import sys
 import time
 import types
-from typing import TYPE_CHECKING, Any, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Union, cast, get_args, get_origin
 
 import click
 from dotenv import load_dotenv
@@ -35,9 +35,12 @@ import typer
 
 from dimos.agents.mcp.mcp_adapter import McpAdapter, McpError
 from dimos.constants import CONFIG_DIR, LOG_DIR
+from dimos.core.daemon import daemonize, install_signal_handlers
 from dimos.core.global_config import GlobalConfig, global_config
 from dimos.core.run_registry import get_most_recent, is_pid_alive, stop_entry
+from dimos.robot.unitree.go2.cli.go2tool import app as go2tool_app
 from dimos.utils.logging_config import setup_logger
+from dimos.visualization.rerun.constants import RerunOpenOption
 
 if TYPE_CHECKING:
     from dimos.core.coordination.blueprints import Blueprint, BlueprintAtom
@@ -116,6 +119,7 @@ def create_dynamic_callback():  # type: ignore[no-untyped-def]
 
 
 main.callback()(create_dynamic_callback())  # type: ignore[no-untyped-call]
+main.add_typer(go2tool_app, name="go2tool")
 
 
 def arg_help(
@@ -204,18 +208,26 @@ def run(
 
     from dimos.core.coordination.blueprints import autoconnect
     from dimos.core.coordination.module_coordinator import ModuleCoordinator
+    from dimos.core.coordination.process_lifecycle import (
+        DIMOS_RUN_ID_ENV,
+        spawn_watchdog,
+    )
     from dimos.core.run_registry import (
         RunEntry,
         check_port_conflicts,
         cleanup_stale,
         generate_run_id,
     )
-    from dimos.robot.get_all_blueprints import get_by_name, get_module_by_name
+    from dimos.robot.get_all_blueprints import get_by_name_or_exit, get_module_by_name_or_exit
     from dimos.utils.logging_config import set_run_log_dir, setup_exception_handler
 
     setup_exception_handler()
 
     cli_config_overrides: dict[str, Any] = ctx.obj
+
+    # this is a workaround until we have a proper way to have delayed-module-choice in blueprints
+    # ex: vis_module(viewer=global_config.viewer) is wrong (viewer will always be default value) without this patch
+    global_config.update(**cli_config_overrides)
 
     # Clean stale registry entries
     stale = cleanup_stale()
@@ -236,14 +248,20 @@ def run(
     run_id = generate_run_id(blueprint_name)
     log_dir = LOG_DIR / run_id
 
+    # Tag every descendant with the run id so the watchdog and stale-run
+    # cleanup can identify them via os.environ after main dies.
+    os.environ[DIMOS_RUN_ID_ENV] = run_id
+
     # Route structured logs (main.jsonl) to the per-run directory.
     # Workers inherit DIMOS_RUN_LOG_DIR env var via forkserver.
     set_run_log_dir(log_dir)
 
-    blueprint = autoconnect(*map(get_by_name, robot_types))
+    blueprint = autoconnect(*map(get_by_name_or_exit, robot_types))
 
     if disable:
-        disabled_classes = tuple(get_module_by_name(name).blueprints[0].module for name in disable)
+        disabled_classes = tuple(
+            get_module_by_name_or_exit(name).blueprints[0].module for name in disable
+        )
         blueprint = blueprint.disabled_modules(*disabled_classes)
 
     if show_help:
@@ -259,11 +277,6 @@ def run(
     coordinator = ModuleCoordinator.build(blueprint, kwargs)
 
     if daemon:
-        from dimos.core.daemon import (
-            daemonize,
-            install_signal_handlers,
-        )
-
         # Health check before daemonizing — catch early crashes
         if not coordinator.health_check():
             typer.echo("Error: health check failed — a worker process died.", err=True)
@@ -283,6 +296,7 @@ def run(
 
         daemonize(log_dir)
 
+        rpyc_port = coordinator.start_rpyc_service()  # After daemonize().
         entry = RunEntry(
             run_id=run_id,
             pid=os.getpid(),
@@ -291,12 +305,15 @@ def run(
             log_dir=str(log_dir),
             cli_args=list(robot_types),
             config_overrides=cli_config_overrides,
+            rpyc_port=rpyc_port,
             original_argv=sys.argv,
         )
         entry.save()
+        spawn_watchdog(run_id, log_dir=log_dir)
         install_signal_handlers(entry, coordinator)
         coordinator.loop()
     else:
+        rpyc_port = coordinator.start_rpyc_service()
         entry = RunEntry(
             run_id=run_id,
             pid=os.getpid(),
@@ -305,9 +322,15 @@ def run(
             log_dir=str(log_dir),
             cli_args=list(robot_types),
             config_overrides=cli_config_overrides,
+            rpyc_port=rpyc_port,
             original_argv=sys.argv,
         )
         entry.save()
+        spawn_watchdog(run_id, log_dir=log_dir)
+        # Foreground: only SIGTERM goes through the handler. SIGINT stays at
+        # default so Ctrl+C raises KeyboardInterrupt and the try/finally below
+        # runs with a visible traceback.
+        install_signal_handlers(entry, coordinator, sigint=False)
         try:
             coordinator.loop()
         finally:
@@ -642,19 +665,56 @@ def send(
     topic_send(topic, message_expr)
 
 
+@main.command()
+def apriltag(
+    out: Path = typer.Option(Path("apriltags.pdf"), "--out", "-o", help="Output PDF path"),
+    ids: str = typer.Option("0-11", "--ids", help="ID spec, e.g. '0-49' or '0,1,5,10-20'"),
+    size_mm: float = typer.Option(
+        50.0, "--size-mm", "-s", help="Tag black-border edge size in mm (typical: 50 or 100)"
+    ),
+    page_size: str = typer.Option(
+        "a4", "--page-size", "-p", help="Page size: a0..a8 (ISO A series) or letter"
+    ),
+    pack: bool = typer.Option(
+        True, "--pack/--no-pack", help="Pack as many tags per page as fit (vs one per page)"
+    ),
+    family: str = typer.Option(
+        "tag36h11",
+        "--family",
+        help=(
+            "Tag family: AprilTag (tag36h11, tag25h9, tag16h5) or "
+            "ArUco (aruco_original, aruco_mip_36h12, aruco_{4x4,5x5,6x6,7x7}_{50,100,250,1000})"
+        ),
+    ),
+) -> None:
+    """Generate a printable AprilTag/ArUco PDF with calibration ruler."""
+    from dimos.utils.cli.apriltag import generate_pdf, parse_id_spec
+
+    id_list = parse_id_spec(ids)
+    path = generate_pdf(
+        id_list, out, family=family, size_mm=size_mm, page_size=page_size, pack=pack
+    )
+    typer.echo(f"Wrote {len(id_list)} tag(s) to {path}")
+
+
 @main.command(name="rerun-bridge")
 def rerun_bridge_cmd(
-    viewer_mode: str = typer.Option(
-        "native", help="Viewer mode: native (desktop), web (browser), none (headless)"
-    ),
     memory_limit: str = typer.Option(
         "25%", help="Memory limit for Rerun viewer (e.g., '4GB', '16GB', '25%')"
+    ),
+    rerun_open: str = typer.Option("native", help="How to open Rerun: native, web, both, none"),
+    rerun_web: bool = typer.Option(
+        True, "--rerun-web/--no-rerun-web", help="Enable/Disable Rerun web server"
     ),
 ) -> None:
     """Launch the Rerun visualization bridge."""
     from dimos.visualization.rerun.bridge import run_bridge
 
-    run_bridge(viewer_mode=viewer_mode, memory_limit=memory_limit)
+    run_bridge(
+        memory_limit=memory_limit,
+        rerun_open=cast("RerunOpenOption", rerun_open),
+        rerun_web=rerun_web,
+    )
 
 
 if __name__ == "__main__":

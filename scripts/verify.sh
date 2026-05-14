@@ -5,7 +5,10 @@
 #   - run inside CI by .github/workflows/verify.yml as the only gate
 #
 # Steps (Q3=B, "medium" verify):
-#   1. uv sync --all-extras --no-extra dds --frozen   (deps + dev tools)
+#   1. uv sync --all-extras --no-extra dds --no-extra unitree-dds --frozen
+#      (deps + dev tools; `dds` and `unitree-dds` both require the cyclonedds
+#      C library which is not installed in CI — upstream `ci.yml` skips them
+#      the same way)
 #   2. uv run pre-commit run --all-files              (lint / format / license / lfs / largefiles)
 #   3. uv run pytest -q --maxfail=5                   (fast tests; pyproject already excludes slow/tool/mujoco)
 #
@@ -37,8 +40,8 @@ echo " uv: $(uv --version)"
 echo " python target: $(cat .python-version 2>/dev/null || echo '<no .python-version>')"
 echo
 
-echo ">>> [1/3] uv sync --all-extras --no-extra dds --frozen"
-uv sync --all-extras --no-extra dds --frozen
+echo ">>> [1/3] uv sync --all-extras --no-extra dds --no-extra unitree-dds --frozen"
+uv sync --all-extras --no-extra dds --no-extra unitree-dds --frozen
 echo "<<< [1/3] uv sync OK"
 echo
 
