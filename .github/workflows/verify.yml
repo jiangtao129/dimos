@@ -44,8 +44,8 @@ jobs:
 
       - name: Install system dependencies (compile + runtime)
         # Subset of the upstream `docker/python/Dockerfile` apt list, narrowed to
-        # what `uv sync --all-extras --no-extra dds --frozen` needs to build and
-        # what the test suite needs at runtime:
+        # what `uv sync --all-extras --no-extra dds --no-extra unitree-dds
+        # --frozen` needs to build and what the test suite needs at runtime:
         #   - git-lfs           : git lfs ls-files / pull (pointer-only)
         #   - portaudio19-dev   : pyaudio (transitive via dimos[unitree] ->
         #                         unitree-webrtc-connect-leshy -> pyaudio)
