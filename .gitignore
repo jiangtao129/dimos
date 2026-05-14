@@ -84,3 +84,13 @@ htmlcov/
 
 # Memory2 autorecord
 recording*.db
+
+# Editor / OS swap files (commonly missed)
+*.bak
+*.swp
+*.swo
+*~
+
+# Tool caches not yet listed
+.pytest_cache/
+.ruff_cache/

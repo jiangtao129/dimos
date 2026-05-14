@@ -389,3 +389,139 @@ CI asserts the file is current — if it's stale, CI fails.
 - CLI / dimos run: `docs/development/dimos_run.md`
 - LFS data: `docs/development/large_file_management.md`
 - Agent system: `docs/agents/`
+
+---
+
+## Pipeline (fork @ `jiangtao129/dimos`)
+
+Everything above this section is upstream content; everything below
+is fork-only and only applies when developing against
+`github.com/jiangtao129/dimos`. Do not assume any of it is true upstream.
+
+### Remotes
+
+This fork lives behind three remotes; keep all three:
+
+- `origin`   — `git@gitlab.topsun:topsun/dimos_huazhijian.git`  (corp GitLab; do not delete)
+- `upstream` — `https://github.com/dimensionalOS/dimos.git`     (community upstream)
+- `github`   — `git@github.com:jiangtao129/dimos.git`           (this fork; PR target)
+
+PRs target **`jiangtao129/dimos`'s `main`**, not upstream's `dev`. Sync
+with upstream via `git fetch upstream && git merge upstream/main` (or
+rebase, when there are no shared review threads). Never push to `origin`
+directly without confirming the corp GitLab branch policy.
+
+### Ground rules
+
+These are mirrored in `.cursor/rules/00-workflow.mdc` so an editing
+agent picks them up automatically.
+
+1. **No direct push to `main`.** Every change goes through a feature
+   branch + PR + auto-merge.
+2. **Never skip `bash scripts/verify.sh`.** If verify is red, fix the
+   code, not the script. Adding `|| true`, weakening assertions, or
+   shortening the test path to "make CI green" is a P0 review block.
+3. **No `git push --force` to `main`.** `--force-with-lease` is only
+   acceptable on the bootstrap PR (covered by an explicit user
+   decision) or after a clean rebase that the user has consented to.
+4. **No secrets in the repo.** `.env`, OAuth tokens, API keys, robot
+   SSH keys, telemetry credentials must stay in `.gitignore`. Pre-commit
+   `lfs_check` and `largefiles-check` will not catch secrets — review
+   every diff.
+5. **One PR, one focused change.** No drive-by refactors, no
+   "while-I'm-here" formatting churn outside the changed area.
+6. **GitHub-side settings are owned by the human user.** Branch
+   protection, Codex auto-review on/off, repo permissions, secrets — the
+   agent emits a TODO checklist; it never clicks GitHub UI on the user's
+   behalf.
+
+### Verify (single source of truth)
+
+```bash
+bash scripts/verify.sh
+```
+
+The same script is executed by `.github/workflows/verify.yml` on every
+PR; keep them in sync. Verify covers, in order:
+
+1. `uv sync --all-extras --no-extra dds --frozen`
+2. `uv run pre-commit run --all-files` (ruff format/check, license
+   header, JSON/YAML/TOML, LFS + largefiles, doclinks, commit-msg filter)
+3. `uv run pytest -q --maxfail=5` (testpaths=`dimos`, with `slow`,
+   `tool`, `mujoco` markers excluded by `pyproject.toml`)
+
+Two environment variables, set automatically by `verify.sh`, make the
+test suite runnable in this fork's CI environment:
+
+- `DIMOS_SKIP_MISSING_LFS=1` — when the corp LFS server is unreachable
+  (the case from GitHub Actions ubuntu-latest), `_lfs_pull` failures are
+  converted to `pytest.skip(...)` via the repo-root `conftest.py`.
+- `DIMOS_SKIP_KNOWN_FLAKY=1` — skips a small whitelist of upstream-bug
+  flaky tests (currently `TestKinematicSim` LCM-thread leak); see the
+  `_KNOWN_FLAKY` list in `conftest.py`.
+
+Both default to unset, so upstream's self-hosted CI is unaffected by
+this fork's `conftest.py`.
+
+### Ship (one-shot PR)
+
+The `.cursor/commands/ship.md` slash command (`/ship`) runs the full
+sequence: branch → commit → `bash scripts/verify.sh` → push → PR via
+REST API → `gh pr merge --auto --squash --delete-branch`. It is the
+*only* sanctioned way to land a change in this fork. Read that file
+before invoking it.
+
+### Codex review guidelines
+
+The ChatGPT Codex GitHub App is enabled on `jiangtao129/dimos` for PR
+auto-review. The bot reacts with a thumbs-up (no issues) or files a
+`COMMENTED` review with a P0/P1/P2/P3 breakdown. When writing code that
+Codex will review, self-check against the categories below before
+opening the PR — Codex is a second pair of eyes, not the first one.
+
+#### P0 — must block the PR
+
+- Control-loop or real-time loop with blocking I/O and no timeout
+  (network read, file lock, queue get, IPC roundtrip).
+- `cmd_vel`, joint torque, joint velocity, end-effector pose, or any
+  hardware command publish that is not clamped by a documented limit
+  before going on the wire. A runaway robot is a hardware-cost incident.
+- `subprocess.run`, `os.system`, `eval`, or `exec` invocations whose
+  arguments come from user-supplied LLM / MCP / `agent-send` text
+  without explicit validation. This is command injection.
+- API keys, OAuth tokens, SSH keys, or telemetry credentials committed
+  to the repo, including `.env` files and "example" placeholders that
+  contain real values.
+- LCM, DDS, or ROS topic-name or message-schema change without
+  matching updates to publishers, subscribers, and serializers.
+  Symptoms appear at runtime as silent message-drop, not at import.
+- Type hints on `In[T]` / `Out[T]` streams that disagree with the
+  generic actually used at runtime — fails inside the `Module` worker
+  process and is hard to debug from the parent.
+- Edits to `scripts/verify.sh`, `.github/workflows/verify.yml`, or this
+  AGENTS.md section that weaken the verify gate (skipping checks,
+  swallowing exit codes, adding broad `|| true`).
+
+#### P1 — flag, may not block
+
+- Backwards-incompatible change to a `Module` RPC signature without
+  migrating callers in the same PR.
+- Change to a `Blueprint`'s `autoconnect()` wiring that silently
+  re-routes streams from one transport to another.
+- Change to the default transport selection
+  (`LCMTransport` / `SHMTransport` / `pSHMTransport` / `pLCMTransport` /
+  `DDSTransport` / `ROSTransport`) for any `In[T]` / `Out[T]`.
+- Test coverage drop on a code path that previously had tests; or a
+  feature added with no test at all.
+- New `pyproject.toml` dependency without a one-line justification in
+  the PR body.
+- Disabling a pre-commit hook globally, or marking a previously enabled
+  pytest marker as default-skipped.
+
+#### P2 / P3 — do not flag
+
+- Python typos, docstring typos, comment typos. (Handled by humans
+  during normal review.)
+- Import ordering, line length, format choices (handled by ruff).
+- Style preferences such as f-string vs `.format()`, comprehension vs
+  loop, when both are correct.

@@ -16,6 +16,11 @@ permissions:
 
 jobs:
   check-changes:
+    # Fork gate: every job in this workflow uses upstream's self-hosted
+    # Linux runner and pushes to upstream's ghcr namespace
+    # (ghcr.io/dimensionalos/...). The fork has no equivalent registry
+    # access, so the entire workflow must be skipped on jiangtao129/dimos.
+    if: github.repository == 'dimensionalOS/dimos'
     runs-on: [self-hosted, Linux]
     outputs:
       ros:        ${{ steps.force.outputs.force == 'true' && 'true' || steps.filter.outputs.ros }}
@@ -82,7 +87,7 @@ jobs:
 
   ros:
     needs: [check-changes]
-    if: needs.check-changes.outputs.ros == 'true'
+    if: github.repository == 'dimensionalOS/dimos' && needs.check-changes.outputs.ros == 'true'
     uses: ./.github/workflows/_docker-build-template.yml
     with:
       should-run: true
@@ -92,7 +97,7 @@ jobs:
 
   ros-python:
     needs: [check-changes, ros]
-    if: always()
+    if: github.repository == 'dimensionalOS/dimos' && always()
     uses: ./.github/workflows/_docker-build-template.yml
     with:
       should-run: ${{
@@ -107,7 +112,7 @@ jobs:
 
   python:
     needs: [check-changes]
-    if: needs.check-changes.outputs.python == 'true'
+    if: github.repository == 'dimensionalOS/dimos' && needs.check-changes.outputs.python == 'true'
     uses: ./.github/workflows/_docker-build-template.yml
     with:
       should-run: true
@@ -117,7 +122,7 @@ jobs:
 
   dev:
     needs: [check-changes, python]
-    if: always()
+    if: github.repository == 'dimensionalOS/dimos' && always()
 
     uses: ./.github/workflows/_docker-build-template.yml
     with:
@@ -132,7 +137,7 @@ jobs:
 
   navigation:
     needs: [check-changes]
-    if: needs.check-changes.outputs.navigation == 'true'
+    if: github.repository == 'dimensionalOS/dimos' && needs.check-changes.outputs.navigation == 'true'
     runs-on: [self-hosted, Linux]
     permissions:
       contents: read
@@ -183,7 +188,7 @@ jobs:
 
   ros-dev:
     needs: [check-changes, ros-python]
-    if: always()
+    if: github.repository == 'dimensionalOS/dimos' && always()
     uses: ./.github/workflows/_docker-build-template.yml
     with:
       should-run: ${{
@@ -198,7 +203,7 @@ jobs:
   build-complete:
     needs: [check-changes, ros, python, ros-python, dev, ros-dev, navigation]
     runs-on: [self-hosted, Linux]
-    if: always()
+    if: github.repository == 'dimensionalOS/dimos' && always()
     steps:
       - name: Build gate
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}

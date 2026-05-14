@@ -10,6 +10,9 @@ permissions:
 
 jobs:
   stale:
+    # Fork gate: stale-PR auto-close is an upstream policy; the fork has
+    # its own auto-merge flow and does not need this.
+    if: github.repository == 'dimensionalOS/dimos'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/stale@v9
