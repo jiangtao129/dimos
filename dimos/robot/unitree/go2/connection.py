@@ -118,43 +118,113 @@ BASE_TO_OPTICAL: Transform = Transform(
 
 def _resolve_robot_ip(
     hint: str | None,
-    timeout: float = 3.0,
-    max_attempts: int = 3,
+    total_timeout: float = 20.0,
+    settle_after_first: float = 3.0,
 ) -> str:
     """Discover Go2 robots on the LAN and pick the right one.
 
-    Always scans (cost: ~3-9s) because Go2 IPs change frequently — a stale
-    ROBOT_IP would otherwise silently lead to a wrong / failed connection.
+    Always scans because Go2 IPs change frequently — a stale ROBOT_IP
+    would otherwise silently lead to a wrong / failed connection.
 
-    UDP multicast probes are unreliable (especially while other dimos modules
-    are racing to set up LCM on the same NIC), so we retry up to `max_attempts`
-    times if 0 devices found. We return early as soon as any attempt yields
-    devices.
+    Uses the same polling pattern as `dimos go2tool discover`: send a
+    multicast probe every 2 s and accumulate replies. UDP multicast
+    response can be very sparse (each Go2 replies on its own internal
+    timer; observed inter-reply gap up to ~10 s on congested networks),
+    so a single 2 s probe often returns nothing.
+
+    Exit conditions (whichever comes first):
+      - hint is set and the hint IP appears in discovered set
+      - we've seen any device AND `settle_after_first` seconds have passed
+        since the first sighting (gives stragglers a chance)
+      - `total_timeout` seconds elapsed
 
     Resolution rules:
-      hint in discovered.ips  -> use hint (validated, "still on LAN")
+      hint in discovered  -> use hint (validated, "still on LAN")
       hint not in discovered, len(discovered) == 1 -> use the one (with notice)
       hint not in discovered, len(discovered) >= 2 -> interactive prompt
       hint not in discovered, len(discovered) == 0 -> RuntimeError
     """
+    import asyncio
     import sys
+    import time
 
     import typer
 
-    from dimos.robot.unitree.go2.cli.landiscovery import discover
+    from dimos.robot.unitree.go2.cli.landiscovery import Go2Device, discover_lan
 
     if hint:
-        typer.echo(f"ROBOT_IP={hint} — scanning LAN to validate ...")
+        typer.echo(
+            f"ROBOT_IP={hint} — scanning LAN to validate "
+            f"(up to {total_timeout:.0f}s, returns early on hint hit) ..."
+        )
     else:
-        typer.echo("ROBOT_IP not set — scanning LAN for Go2 robots ...")
+        typer.echo(
+            f"ROBOT_IP not set — scanning LAN for Go2 robots "
+            f"(up to {total_timeout:.0f}s) ..."
+        )
 
-    devices: list[Any] = []
-    for attempt in range(1, max_attempts + 1):
-        devices = discover(timeout=timeout)
-        if devices:
-            break
-        if attempt < max_attempts:
-            typer.echo(f"  no Go2 seen yet (attempt {attempt}/{max_attempts}) — retrying ...")
+    devices_by_serial: dict[str, Go2Device] = {}
+    first_seen_at: float | None = None
+
+    async def _collect() -> None:
+        nonlocal first_seen_at
+        last_progress_log = time.monotonic()
+        async for d in discover_lan(tick=2.0, timeout=1.5):
+            if d.serial in devices_by_serial:
+                # keep most recent (IP could have changed mid-scan)
+                devices_by_serial[d.serial] = d
+                continue
+            devices_by_serial[d.serial] = d
+            if first_seen_at is None:
+                first_seen_at = time.monotonic()
+            typer.echo(f"  + saw serial={d.serial}, ip={d.ip} (via {d.iface})")
+
+            # Hint hit -> done immediately
+            if hint and d.ip == hint:
+                return
+
+            # Settle window: after first sighting, wait `settle_after_first`
+            # seconds for stragglers, then exit.
+            # (Handled by the outer wait_for; we just continue here.)
+
+        # If discover_lan iterator exits (it normally doesn't), we're done.
+
+    async def _run() -> None:
+        try:
+            await asyncio.wait_for(_collect(), timeout=total_timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            pass
+
+        # Settle-window check: if we already have devices and the wait_for
+        # cancelled but settle hasn't elapsed yet, that's fine — wait_for
+        # respected total_timeout which is the upper bound.
+
+    # Drive the async collection with an extra "settle window" abort:
+    # we want to exit `settle_after_first` seconds after the first sighting,
+    # even if total_timeout hasn't fired.
+    async def _run_with_settle() -> None:
+        start = time.monotonic()
+        try:
+            task = asyncio.create_task(_collect())
+            while not task.done():
+                now = time.monotonic()
+                if now - start >= total_timeout:
+                    task.cancel()
+                    break
+                if first_seen_at is not None and (now - first_seen_at) >= settle_after_first:
+                    task.cancel()
+                    break
+                await asyncio.sleep(0.2)
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        except Exception:
+            pass
+
+    asyncio.run(_run_with_settle())
+
+    devices = list(devices_by_serial.values())
 
     # 0 found
     if not devices:
