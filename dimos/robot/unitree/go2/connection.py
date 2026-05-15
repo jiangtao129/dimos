@@ -159,8 +159,7 @@ def _resolve_robot_ip(
         )
     else:
         typer.echo(
-            f"ROBOT_IP not set — scanning LAN for Go2 robots "
-            f"(up to {total_timeout:.0f}s) ..."
+            f"ROBOT_IP not set — scanning LAN for Go2 robots (up to {total_timeout:.0f}s) ..."
         )
 
     devices_by_serial: dict[str, Go2Device] = {}
@@ -168,7 +167,6 @@ def _resolve_robot_ip(
 
     async def _collect() -> None:
         nonlocal first_seen_at
-        last_progress_log = time.monotonic()
         async for d in discover_lan(tick=2.0, timeout=1.5):
             if d.serial in devices_by_serial:
                 # keep most recent (IP could have changed mid-scan)
