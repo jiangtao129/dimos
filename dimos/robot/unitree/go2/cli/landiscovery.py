@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-LAN discovery for Unitree Go2 robots.
+"""LAN discovery for Unitree Go2 robots.
 
 Go2s respond to a custom UDP-multicast probe (group 231.1.1.1, port 10131)
 with a JSON payload containing their serial number and IP. This module sends
@@ -23,18 +22,6 @@ Implemented from scratch (rather than reusing legion1581/unitree_webrtc_connect'
 scanner) so we can pin the multicast send/recv to a specific interface — Tailscale
 and other VPN tun devices install a 224.0.0.0/4 route in a separate table that
 silently swallows the probe otherwise.
-
----
-
-Unitree Go2 机器人本地局域网发现。
-
-Go2 机器人会响应一个定制的 UDP 多播探针（组播地址 231.1.1.1，端口 10131），
-回复内容为带有序列号和 IP 的 JSON 数据包。本模块负责发送该探针，并在 10134 端口
-收集回复。
-
-实现上我们完全独立于 legion1581/unitree_webrtc_connect 的 scanner，这样我们
-可以指定具体的网口进行多播的发送和接收——Tailscale 和其他 VPN 的 tun 设备会在 
-224.0.0.0/4 路由上单独安装路由表，否则多播数据包会无声丢弃。
 """
 
 from __future__ import annotations
@@ -110,7 +97,15 @@ def _candidate_ifaces() -> Iterator[tuple[str, str]]:
     # (Shadowsocks/Clash/Surge etc. on 198.18.0.0/15). Including it as a
     # standalone prefix because `tun` doesn't match it.
     skip_prefixes = (
-        "lo", "tailscale", "wg", "tun", "utun", "docker", "br-", "veth", "Meta",
+        "lo",
+        "tailscale",
+        "wg",
+        "tun",
+        "utun",
+        "docker",
+        "br-",
+        "veth",
+        "Meta",
     )
     # Address-prefix blacklist for tunnel address ranges that occasionally show
     # up on otherwise non-tun-named interfaces:
